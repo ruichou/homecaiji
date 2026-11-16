@@ -49,10 +49,38 @@ export function planAccount(acc, cfg, dateStr) {
   return sessions;
 }
 
+/** 日常闲逛：每天 2 段，避开采集轮次 */
+function planIdle(acc, cfg, dateStr) {
+  const rnd = mulberry32(hash(dateStr + acc.id + 'idle'));
+  const G = cfg.global;
+  const [lo, hi] = G.idleMinutesRange || [15, 35];
+  const slots = ['10:30', '18:40'];
+  const out = [];
+  for (const slot of slots) {
+    const base = toMin(slot);
+    const start = base + Math.round(rnd() * 20 - 10);
+    const dur = Math.round(lo + rnd() * (hi - lo));
+    out.push({
+      type: 'idle',
+      account: acc.id,
+      index: out.length + 1,
+      start: toHHMM(start),
+      end: toHHMM(start + dur),
+      durationMin: dur,
+      targetLinks: 0,
+      clicks: 0,
+      commentChecks: 0,
+      hotTopics: [...cfg.hotTopics].sort(() => rnd() - 0.5).slice(0, 2)
+    });
+  }
+  return out;
+}
+
 export function buildDayPlan(cfg, dateStr) {
   const accounts = cfg.accounts.filter((a) => a.enabled);
-  const sessions = accounts.flatMap((a) => planAccount(a, cfg, dateStr));
-  sessions.sort((a, b) => a.start.localeCompare(b.start));
+  const collect = accounts.flatMap((a) => planAccount(a, cfg, dateStr).map((s) => ({ ...s, type: 'collect' })));
+  const idle = accounts.flatMap((a) => planIdle(a, cfg, dateStr));
+  const sessions = [...collect, ...idle].sort((a, b) => a.start.localeCompare(b.start));
 
   const breaks = [];
   for (let i = 1; i < sessions.length; i++) {

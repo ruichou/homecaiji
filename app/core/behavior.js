@@ -81,6 +81,99 @@ export async function loginState(page) {
   return evaluate(page.send, LOGIN_JS).catch(() => ({ needLogin: true }));
 }
 
+/** 进直播间待一段时间（只停留、轻微滚动，不发言不送礼） */
+export async function watchLive(page, { minutes = 12, onEvent } = {}) {
+  const emit = onEvent || (() => {});
+  await goto(page, 'https://live.douyin.com/', randInt(2500, 4000));
+  await sleep(randInt(1500, 3000));
+
+  const hit = await evaluate(page.send, `(() => {
+    const as = [...document.querySelectorAll('a[href^="https://live.douyin.com/"]')]
+      .filter(a => /\\/\\d{5,}/.test(a.getAttribute('href') || ''));
+    if (!as.length) return null;
+    const a = as[Math.floor(Math.random() * as.length)];
+    const r = a.getBoundingClientRect();
+    if (r.width < 60 || r.height < 60) return null;
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), href: a.getAttribute('href') };
+  })()`);
+
+  if (!hit) { emit({ type: 'log', message: '页面上没找到可进的直播间' }); return false; }
+
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: hit.x, y: hit.y });
+  await sleep(randInt(150, 380));
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+  await sleep(randInt(70, 140));
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+  await sleep(randInt(3000, 5000));
+
+  emit({ type: 'log', message: `进了直播间 ${hit.href}，待 ${minutes} 分钟` });
+
+  const endAt = Date.now() + minutes * 60_000;
+  while (Date.now() < endAt) {
+    const left = Math.ceil((endAt - Date.now()) / 1000);
+    await sleep(Math.min(randInt(45, 110), left) * 1000);
+    try {
+      await page.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: randInt(100, 460), y: randInt(150, 760)
+      });
+    } catch {}
+    if (Math.random() < 0.3) await humanScroll(page, { rounds: 1, pauseMin: 300, pauseMax: 900 });
+  }
+  return true;
+}
+
+/**
+ * 日常闲逛：刷推荐、点视频、看评论、偶尔进直播间。不采集，纯保持账号活跃。
+ */
+export async function idleSession(acc, opts = {}) {
+  const emit = opts.onEvent || (() => {});
+  const minutes = opts.minutes || randInt(15, 35);
+  const allowLive = opts.allowLive !== false;
+  const page = await openSession(acc);
+  const endAt = Date.now() + minutes * 60_000;
+  const stat = { minutes, videos: 0, comments: 0, lives: 0 };
+
+  try {
+    const st = await loginState(page);
+    if (st.needLogin) { emit({ type: 'error', message: '未登录，需要扫码' }); return stat; }
+
+    await goto(page, 'https://www.douyin.com/', randInt(2200, 3600));
+
+    while (Date.now() < endAt) {
+      await humanScroll(page, { rounds: randInt(2, 5) });
+
+      if (Math.random() < 0.35 && await clickRandomVideo(page)) {
+        const sec = randInt(6, 30);
+        emit({ type: 'log', message: `看一条视频 ${sec}s` });
+        await sleep(sec * 1000);
+        if (Math.random() < 0.4) { await peekComments(page, randInt(3000, 9000)); stat.comments++; }
+        await back(page);
+        stat.videos++;
+      }
+
+      // 剩的时间还够，就进直播间待一会儿
+      const leftMin = Math.floor((endAt - Date.now()) / 60_000);
+      if (allowLive && leftMin >= 6 && Math.random() < 0.18) {
+        const liveMin = Math.min(randInt(5, 12), leftMin - 2);
+        if (liveMin >= 3) {
+          if (await watchLive(page, { minutes: liveMin, onEvent: emit })) stat.lives++;
+          await goto(page, 'https://www.douyin.com/', randInt(1800, 2800));
+        }
+      }
+
+      await sleep(randInt(2000, 6000));
+    }
+
+    emit({ type: 'log', message: `闲逛结束：视频 ${stat.videos} 条 · 评论 ${stat.comments} 次 · 直播 ${stat.lives} 场` });
+    return stat;
+  } catch (e) {
+    emit({ type: 'error', message: '闲逛异常: ' + e.message });
+    return { ...stat, error: e.message };
+  } finally {
+    try { page.close(); } catch {}
+  }
+}
+
 /**
  * 跑一轮完整会话
  * @param {object} acc

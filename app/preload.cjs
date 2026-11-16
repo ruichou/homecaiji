@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   closeAll: () => ipcRenderer.invoke('acc:closeAll'),
   todayPlan: () => ipcRenderer.invoke('plan:today'),
   runOnce: (id) => ipcRenderer.invoke('run:once', id),
+  runIdle: (id) => ipcRenderer.invoke('run:idle', id),
   stopRun: (id) => ipcRenderer.invoke('run:stop', id),
   getState: () => ipcRenderer.invoke('state:get'),
   setAuto: (on) => ipcRenderer.invoke('auto:set', on),

@@ -10,7 +10,10 @@
     "industrySearchesPerSession": 1,
     "clickIntoVideos": [2, 5],
     "commentChecks": [1, 2],
-    "scrollPauseMs": [800, 3200]
+    "scrollPauseMs": [800, 3200],
+    "idleMinutesRange": [15, 35],
+    "liveWatchPerDay": 1,
+    "liveMinutesRange": [10, 30]
   },
   "hotTopics": [
     "BLG夺冠", "S15全球总决赛", "三角洲行动", "英雄联盟", "AI绘画",

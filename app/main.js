@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { loadConfig, saveConfig, loadState, saveState, accountRuntime, todayStr, ensureDir, ROOT } from './core/store.js';
 import { openWindow, closeWindow, cdpAlive, tileLayout } from './core/chrome.js';
 import { buildDayPlan, minutesToNext } from './core/scheduler.js';
-import { runSession } from './core/behavior.js';
+import { runSession, idleSession } from './core/behavior.js';
 import { filterItems, loadTaxonomy } from '../tools/relevance.mjs';
 
 const DATA = path.join(ROOT, 'data');
@@ -125,8 +125,48 @@ async function runOne(id, opts = {}) {
   }
 }
 
-function startAuto() {
-  if (autoTimer) return;
+async function idleOne(id, opts = {}) {
+  if (running.has(id)) { log('该账号正在跑，跳过', 'warn'); return { skipped: true }; }
+  const acc = accById(id);
+  if (!acc) throw new Error('账号不存在');
+
+  const [lo, hi] = cfg.global.idleMinutesRange || [15, 35];
+  const minutes = opts.minutes || Math.round(lo + Math.random() * (hi - lo));
+
+  running.set(id, { startedAt: Date.now() });
+  const rt = accountRuntime(state, id);
+  rt.status = 'idle-run';
+  saveState(state);
+  progress({ id, status: 'idle-run' });
+
+  try {
+    await openAndTrack(id);
+    log(`—— ${acc.label || acc.id} 开始闲逛（约 ${minutes} 分钟）——`);
+    const stat = await idleSession(acc, {
+      minutes,
+      allowLive: true,
+      onEvent: (e) => {
+        if (e.type === 'log') log(`${acc.label || acc.id}: ${e.message}`);
+        if (e.type === 'error') log(`${acc.label || acc.id}: ${e.message}`, 'error');
+      }
+    });
+    rt.status = 'idle';
+    rt.idleAt = new Date().toISOString();
+    saveState(state);
+    progress({ id, status: 'idle' });
+    return stat;
+  } catch (e) {
+    rt.status = 'idle-error';
+    rt.lastError = e.message;
+    saveState(state);
+    log(`${acc.label || acc.id} 闲逛失败: ${e.message}`, 'error');
+    return { error: e.message };
+  } finally {
+    running.delete(id);
+  }
+}
+
+function startAuto() {  if (autoTimer) return;
   autoTimer = setInterval(async () => {
     if (!cfg || !cfg.accounts.some((a) => a.enabled)) return;
     const plan = buildDayPlan(cfg, todayStr());
@@ -143,8 +183,13 @@ function startAuto() {
       if (cur >= startMin && cur <= startMin + 20 && !state.autoRun[dayKey].includes(key) && !running.has(s.account)) {
         state.autoRun[dayKey].push(key);
         saveState(state);
-        log(`自动触发：${s.account} 第 ${s.index} 轮（计划 ${s.start}）`);
-        await runOne(s.account, { hotTopics: s.hotTopics });
+        if (s.type === 'idle') {
+          log(`自动触发：${s.account} 闲逛（计划 ${s.start}）`);
+          await idleOne(s.account, { minutes: s.durationMin });
+        } else {
+          log(`自动触发：${s.account} 第 ${s.index} 轮（计划 ${s.start}）`);
+          await runOne(s.account, { hotTopics: s.hotTopics });
+        }
       }
     }
   }, 60_000);
@@ -186,6 +231,7 @@ app.whenReady().then(() => {
   ipcMain.handle('plan:today', () => ({ plan: buildDayPlan(cfg, todayStr()), next: minutesToNext(buildDayPlan(cfg, todayStr())) }));
   ipcMain.handle('state:get', () => ({ state, today: todayStr() }));
   ipcMain.handle('run:once', (_e, id) => runOne(id));
+  ipcMain.handle('run:idle', (_e, id) => idleOne(id));
   ipcMain.handle('run:stop', (_e, id) => { running.delete(id); return { ok: true }; });
   ipcMain.handle('auto:set', (_e, on) => { on ? startAuto() : stopAuto(); return { auto: !!autoTimer }; });
 });

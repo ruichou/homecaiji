@@ -3,7 +3,8 @@ let cfg = null;
 let statusMap = {};
 
 function statusDot(alive, rt) {
-  const cls = rt?.status === 'running' ? 'run' : rt?.status === 'captcha' ? 'bad' : rt?.status === 'error' ? 'bad' : alive ? 'ok' : 'off';
+  const running = rt?.status === 'running' || rt?.status === 'idle-run';
+  const cls = running ? 'run' : rt?.status === 'captcha' ? 'bad' : rt?.status === 'error' ? 'bad' : alive ? 'ok' : 'off';
   return `<span class="dot ${cls}"></span>`;
 }
 
@@ -38,6 +39,7 @@ async function refresh() {
         <div class="acc-actions">
           <button class="btn small" data-open="${a.id}">开窗</button>
           <button class="btn small ghost" data-close="${a.id}">关窗</button>
+          <button class="btn small ghost" data-idle="${a.id}" ${rt.status === 'idle-run' ? 'disabled' : ''}>闲逛</button>
           <button class="btn small primary" data-run="${a.id}" ${rt.status === 'running' ? 'disabled' : ''}>跑一轮</button>
         </div>
       </div>`;
@@ -49,7 +51,8 @@ async function refresh() {
     <div class="plan-row">
       <span class="time">${s.start}–${s.end}</span>
       <span class="who">${s.account}</span>
-      <span class="muted small">${s.durationMin}分 · 热点 ${s.hotTopics.length} 个 · 点进 ${s.clicks} 条</span>
+      <span class="tag ${s.type === 'idle' ? 'idle' : ''}">${s.type === 'idle' ? '闲逛' : '采集'}</span>
+      <span class="muted small">${s.durationMin}分${s.type === 'idle' ? '' : ` · 热点 ${s.hotTopics.length} 个 · 点进 ${s.clicks} 条`}</span>
     </div>`).join('') || '<div class="muted">今天没有排期</div>';
 }
 
@@ -58,6 +61,7 @@ document.addEventListener('click', async (e) => {
   if (t.dataset.open) { await window.api.openWindow(t.dataset.open); refresh(); }
   if (t.dataset.close) { await window.api.closeWindow(t.dataset.close); refresh(); }
   if (t.dataset.run) { t.disabled = true; await window.api.runOnce(t.dataset.run); refresh(); }
+  if (t.dataset.idle) { t.disabled = true; await window.api.runIdle(t.dataset.idle); refresh(); }
 });
 
 $('#btnOpenAll').onclick = async () => { await window.api.openAll(); setTimeout(refresh, 1500); };

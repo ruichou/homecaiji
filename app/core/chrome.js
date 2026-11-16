@@ -41,6 +41,7 @@ export async function openWindow(acc, opts = {}) {
     `--user-data-dir=${acc.profile}`,
     '--no-first-run',
     '--no-default-browser-check',
+    '--mute-audio',
     '--disable-features=Translate,MediaRouter',
     `--window-size=${opts.width || 520},${opts.height || 900}`
   ];
@@ -53,7 +54,17 @@ export async function openWindow(acc, opts = {}) {
 
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 500));
-    if (await cdpAlive(acc.port)) return { launched: true, port: acc.port, pid: child.pid };
+    if (await cdpAlive(acc.port)) {
+      // 等页面真正开始导航，避免抓到 about:blank
+      for (let j = 0; j < 20; j++) {
+        try {
+          const list = await (await fetch(`http://127.0.0.1:${acc.port}/json/list`, { signal: AbortSignal.timeout(2000) })).json();
+          if (list.some((x) => x.type === 'page' && /^https?:\/\//.test(x.url || ''))) break;
+        } catch {}
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return { launched: true, port: acc.port, pid: child.pid };
+    }
   }
   throw new Error(`账号 ${acc.id} 的 Chrome 启动超时（端口 ${acc.port}）`);
 }
