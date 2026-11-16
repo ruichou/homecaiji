@@ -8,6 +8,7 @@ import { openWindow, closeWindow, cdpAlive, tileLayout } from './core/chrome.js'
 import { buildDayPlan, minutesToNext } from './core/scheduler.js';
 import { runSession, idleSession } from './core/behavior.js';
 import { filterItems, loadTaxonomy } from '../tools/relevance.mjs';
+import { pushLinks } from './core/push.js';
 
 const DATA = path.join(ROOT, 'data');
 const COLLECT_DIR = path.join(DATA, 'collected');
@@ -78,6 +79,8 @@ async function runOne(id, opts = {}) {
     const res = await runSession(acc, {
       hotTopics: opts.hotTopics || cfg.hotTopics,
       industry: acc.industry,
+      keyword: opts.keyword || acc.industry,
+      durationMin: opts.durationMin || 20,
       onEvent: (e) => {
         if (e.type === 'log') log(`${acc.label || acc.id}: ${e.message}`);
         if (e.type === 'error') log(`${acc.label || acc.id}: ${e.message}`, 'error');
@@ -110,6 +113,16 @@ async function runOne(id, opts = {}) {
     saveState(state);
 
     log(`${acc.label || acc.id} 本轮完成：原始 ${stats.total} → 保留 ${stats.kept}，累计 ${merged.size} 条`);
+
+    // 推给引潮
+    try {
+      const pr = await pushLinks(kept, { source: `agent-${acc.id}` });
+      if (pr.ok) log(`推送：接受 ${pr.accepted} / 重复 ${pr.duplicates} / 本地已推跳过 ${pr.skipped}`);
+      else log(`推送失败：${pr.error}`, 'error');
+    } catch (e) {
+      log(`推送异常：${e.message}`, 'error');
+    }
+
     progress({ id, status: rt.status, links: rt.links, today: merged.size });
     return { kept: stats.kept, total: stats.total, today: merged.size };
   } catch (e) {
@@ -188,7 +201,7 @@ function startAuto() {  if (autoTimer) return;
           await idleOne(s.account, { minutes: s.durationMin });
         } else {
           log(`自动触发：${s.account} 第 ${s.index} 轮（计划 ${s.start}）`);
-          await runOne(s.account, { hotTopics: s.hotTopics });
+          await runOne(s.account, { hotTopics: s.hotTopics, durationMin: s.durationMin, keyword: s.keyword });
         }
       }
     }

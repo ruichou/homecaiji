@@ -77,7 +77,7 @@ export async function connectAt(port = PORT) {
     const i = ++id;
     pending.set(i, { res, rej });
     ws.send(JSON.stringify({ id: i, method, params }));
-    setTimeout(() => { if (pending.has(i)) { pending.delete(i); rej(new Error('timeout ' + method)); } }, 30000);
+    setTimeout(() => { if (pending.has(i)) { pending.delete(i); rej(new Error('timeout ' + method)); } }, 15000);
   });
 
   const on = (method, fn) => {

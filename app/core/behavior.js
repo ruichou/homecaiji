@@ -102,6 +102,50 @@ export async function typeText(page, text) {
   }
 }
 
+/** 点左侧导航（推荐 / 精选 / 关注） */
+export async function clickNav(page, text) {
+  const hit = await evaluate(page.send, `(() => {
+    const t = ${JSON.stringify(text)};
+    const els = [...document.querySelectorAll('a,div,span,li')]
+      .filter(e => (e.innerText || '').trim() === t && e.offsetParent !== null)
+      .map(e => ({ r: e.getBoundingClientRect() }))
+      .filter(x => x.r.left < 140 && x.r.top > 60 && x.r.width > 20 && x.r.width < 140)
+      .sort((a, b) => a.r.top - b.r.top);
+    if (!els.length) return null;
+    const r = els[0].r;
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  })()`);
+  if (!hit) return false;
+  await humanClick(page, hit.x, hit.y);
+  await sleep(rand(1800, 3000));
+  return true;
+}
+
+/** 回推荐流：优先点导航，失败再跳 URL */
+export async function goRecommend(page) {
+  if (await clickNav(page, '推荐')) return true;
+  await goto(page, 'https://www.douyin.com/?recommend=1&from_nav=1', randInt(2400, 3600));
+  return false;
+}
+
+/** 按视频真实时长决定看多久：看 35%–75%，至少 6 秒，最多 3 分钟 */
+export async function watchVideo(page, { minSec = 6, maxSec = 180 } = {}) {
+  let dur = 0;
+  try {
+    dur = await evaluate(page.send, `(() => {
+      const v = document.querySelector('video');
+      return v && isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+    })()`);
+  } catch {}
+
+  const target = dur > 0
+    ? Math.min(Math.max(dur * rand(0.35, 0.75), minSec), maxSec)
+    : rand(8, 25);
+
+  await sleep(target * 1000);
+  return { duration: Math.round(dur), watched: Math.round(target) };
+}
+
 const SEARCH_BOX_JS = `(() => {
   const el = document.querySelector('[data-e2e="searchbar-input"]')
           || document.querySelector('input[placeholder*="搜索"]')
@@ -113,50 +157,101 @@ const SEARCH_BOX_JS = `(() => {
            y: Math.round(r.y + r.height * (0.35 + Math.random() * 0.3)) };
 })()`;
 
-/**
- * 像人一样搜索：点搜索框 → 逐字输入 → 等联想 → 回车
- * 失败时退回直接跳转
- */
-export async function humanSearch(page, keyword) {
-  let box = null;
-  try { box = await evaluate(page.send, SEARCH_BOX_JS); } catch {}
+const READ_BOX_JS = `(() => {
+  const el = document.querySelector('[data-e2e="searchbar-input"]') || document.querySelector('input[placeholder*="搜索"]');
+  return el ? el.value : '';
+})()`;
 
-  if (!box) {
-    await goto(page, `https://www.douyin.com/search/${encodeURIComponent(keyword)}`, randInt(2400, 3600));
-    return false;
-  }
+const ON_TARGET_JS = (kw) => `(() => {
+  try {
+    return location.pathname.startsWith('/search/') &&
+           decodeURIComponent(location.pathname).includes(${JSON.stringify(kw)});
+  } catch { return false; }
+})()`;
 
-  await humanClick(page, box.x, box.y);
-  await sleep(rand(220, 500));
-
-  // 清空原有内容
-  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await sleep(rand(60, 140));
-  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-  await sleep(rand(180, 400));
-
-  await typeText(page, keyword);
-
-  // 看联想词，犹豫一下
-  await sleep(rand(700, 1800));
-
+async function pressEnter(page) {
   await page.send('Input.dispatchKeyEvent', {
     type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
     text: '\r', unmodifiedText: '\r'
   });
   await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+}
 
-  // 等结果出来
-  for (let i = 0; i < 24; i++) {
-    await sleep(500);
-    try {
-      const ok = await evaluate(page.send, `(() => /\\/search\\//.test(location.pathname) && document.querySelectorAll('a[href*="/video/"]').length > 0)()`);
-      if (ok) return true;
-    } catch {}
+/**
+ * 像人一样搜索：点搜索框 → 逐字输入 → 等联想 → 回车
+ * 会校验输入值和最终 URL，失败则重试，最后兜底直接跳转
+ */
+export async function humanSearch(page, keyword) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let box = null;
+    try { box = await evaluate(page.send, SEARCH_BOX_JS); } catch {}
+    if (!box) break;
+
+    await humanClick(page, box.x, box.y);
+    await sleep(rand(220, 500));
+
+    // 清空原有内容
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
+    await sleep(rand(60, 140));
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await sleep(rand(180, 400));
+
+    await typeText(page, keyword);
+    await sleep(rand(700, 1600));
+
+    // 校验：输入框里是不是我们要的词
+    let val = '';
+    try { val = await evaluate(page.send, READ_BOX_JS); } catch {}
+    if (!val || !String(val).includes(keyword)) {
+      // 输入没进去，重试一次
+      continue;
+    }
+
+    await pressEnter(page);
+
+    // 等 URL 变成目标搜索页
+    for (let i = 0; i < 24; i++) {
+      await sleep(500);
+      try { if (await evaluate(page.send, ON_TARGET_JS(keyword))) return true; } catch {}
+    }
   }
+
+  // 兜底：直接跳转
+  await goto(page, `https://www.douyin.com/search/${encodeURIComponent(keyword)}`, randInt(2400, 3600));
+  return false;
+}
+
+/** 点顶部标签（视频 / 综合 等） */
+export async function clickTab(page, text) {
+  const hit = await evaluate(page.send, `(() => {
+    const t = ${JSON.stringify(text)};
+    const els = [...document.querySelectorAll('div,span,a,li')]
+      .filter(e => (e.innerText || '').trim() === t && e.offsetParent !== null)
+      .map(e => ({ r: e.getBoundingClientRect() }))
+      .filter(x => x.r.top < 300 && x.r.width > 10 && x.r.height > 10)
+      .sort((a, b) => a.r.top - b.r.top);
+    if (!els.length) return null;
+    const r = els[0].r;
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  })()`);
+  if (!hit) return false;
+  await humanClick(page, hit.x, hit.y);
+  await sleep(rand(1600, 2800));
   return true;
+}
+
+async function countVideoAnchors(page) {
+  try { return await evaluate(page.send, `document.querySelectorAll('a[href*="/video/"]').length`); } catch { return 0; }
+}
+
+/** 搜完之后确保在能点开卡片的视图上（综合页的卡片不是 <a>，得切到视频 tab） */
+async function ensureVideoCards(page) {
+  if (await countVideoAnchors(page) > 0) return true;
+  const ok = await clickTab(page, '视频');
+  await sleep(rand(1500, 2500));
+  return ok && (await countVideoAnchors(page)) > 0;
 }
 
 /** 点进一条随机视频（元素内随机位置，带鼠标轨迹） */
@@ -254,15 +349,14 @@ export async function idleSession(acc, opts = {}) {
     const st = await loginState(page);
     if (st.needLogin) { emit({ type: 'error', message: '未登录，需要扫码' }); return stat; }
 
-    await goto(page, 'https://www.douyin.com/', randInt(2200, 3600));
+    await goRecommend(page);
 
     while (Date.now() < endAt) {
       await humanScroll(page, { rounds: randInt(2, 5) });
 
       if (Math.random() < 0.35 && await clickRandomVideo(page)) {
-        const sec = randInt(6, 30);
-        emit({ type: 'log', message: `看一条视频 ${sec}s` });
-        await sleep(sec * 1000);
+        const w = await watchVideo(page);
+        emit({ type: 'log', message: `看一条视频 ${w.watched}s` });
         if (Math.random() < 0.4) { await peekComments(page, randInt(3000, 9000)); stat.comments++; }
         await back(page);
         stat.videos++;
@@ -274,7 +368,7 @@ export async function idleSession(acc, opts = {}) {
         const liveMin = Math.min(randInt(5, 12), leftMin - 2);
         if (liveMin >= 3) {
           if (await watchLive(page, { minutes: liveMin, onEvent: emit })) stat.lives++;
-          await goto(page, 'https://www.douyin.com/', randInt(1800, 2800));
+          await goRecommend(page);
         }
       }
 
@@ -298,24 +392,43 @@ export async function idleSession(acc, opts = {}) {
 export async function collectIndustry(page, keyword, opts = {}) {
   const emit = opts.onEvent || (() => {});
   const target = opts.target || randInt(15, 25);
+  const keep = opts.keep || (() => true);
   const found = new Map();
   const cap = attachSearchCapture(page.send, page.on, found);
 
+  // 只把符合行业特征的结果计入目标，避免热点残留占额度
+  const useful = () => {
+    let n = 0;
+    for (const it of found.values()) if (keep(it)) n++;
+    return n;
+  };
+
   try {
     await humanSearch(page, keyword);
+
+    // 校验：确实停在这个关键词的搜索页，否则宁可不采
+    let onTarget = false;
+    try { onTarget = await evaluate(page.send, ON_TARGET_JS(keyword)); } catch {}
+    if (!onTarget) {
+      let now = '';
+      try { now = await evaluate(page.send, 'location.href'); } catch {}
+      emit({ type: 'error', message: `搜索未生效，当前页面 ${now}，本轮不采集` });
+      return { items: [], captcha: false, rounds: 0, failed: true };
+    }
+
+    await ensureVideoCards(page);
 
     // 等首批结果
     for (let i = 0; i < 20 && found.size === 0; i++) await sleep(500);
 
     let round = 0;
-    while (found.size < target && round < 10) {
+    while (useful() < target && round < 10) {
       round++;
       await humanScroll(page, { rounds: randInt(2, 4), pauseMin: 700, pauseMax: 2200 });
 
       // 穿插点进视频，不要连着滚到底
       if (Math.random() < 0.45 && await clickRandomVideo(page)) {
-        const sec = randInt(6, 20);
-        await sleep(sec * 1000);
+        await watchVideo(page, { maxSec: 90 });
         if (Math.random() < 0.35) await peekComments(page, randInt(3000, 8000));
         await back(page);
         await sleep(randInt(1200, 2500));
@@ -325,8 +438,10 @@ export async function collectIndustry(page, keyword, opts = {}) {
     }
 
     const captcha = await evaluate(page.send, `(() => /请选择所有|拖拽到下方|完成验证|安全验证/.test(document.body.innerText || ''))()`).catch(() => false);
-    emit({ type: 'log', message: `采集了 ${round} 轮，拿到 ${found.size} 条` });
-    return { items: [...found.values()], captcha, rounds: round };
+    const all = [...found.values()];
+    const items = all.filter(keep);
+    emit({ type: 'log', message: `采集了 ${round} 轮，拿到 ${items.length} 条相关（另有 ${all.length - items.length} 条无关已剔除）` });
+    return { items, captcha, rounds: round };
   } finally {
     cap.off();
   }
@@ -340,7 +455,8 @@ export async function collectIndustry(page, keyword, opts = {}) {
 export async function runSession(acc, opts = {}) {
   const emit = opts.onEvent || (() => {});
   const hotPool = opts.hotTopics || [];
-  const industry = opts.industry || acc.industry;
+  const keyword = opts.keyword || acc.industry;
+  const industry = keyword;
   const page = await openSession(acc);
   const started = Date.now();
   const result = { links: [], searched: [], videos: 0, comments: 0 };
@@ -349,17 +465,18 @@ export async function runSession(acc, opts = {}) {
     const st = await loginState(page);
     if (st.needLogin) { emit({ type: 'error', message: '未登录，需要扫码' }); return result; }
 
-    // ① 热身：首页推荐随便看看
+    // ① 热身：进推荐流随便看看（根路径会跳到 /jingxuan 精选页，那里没有视频卡片）
     emit({ type: 'log', message: '热身：刷推荐' });
-    await goto(page, 'https://www.douyin.com/', randInt(2200, 3600));
+    await goRecommend(page);
+    emit({ type: 'log', message: '推荐页就绪，开始滚动' });
     await humanScroll(page, { rounds: randInt(6, 10) });
+    emit({ type: 'log', message: '热身滚动完成' });
 
     // 热身时点进 1–2 条看一会儿
     for (let i = 0; i < randInt(1, 2); i++) {
       if (await clickRandomVideo(page)) {
-        const sec = randInt(8, 25);
-        emit({ type: 'log', message: `点进一条视频，看 ${sec}s` });
-        await sleep(sec * 1000);
+        const w = await watchVideo(page);
+        emit({ type: 'log', message: `点进一条视频，看 ${w.watched}s（时长 ${w.duration}s）` });
         if (Math.random() < 0.5) { await peekComments(page, randInt(4000, 9000)); result.comments++; }
         await back(page);
         result.videos++;
@@ -367,20 +484,31 @@ export async function runSession(acc, opts = {}) {
     }
 
     // ② 热点搜索（不记录）
+    const budgetMs = (opts.durationMin || 0) * 60_000;
     const hotN = randInt(2, 4);
     const picked = [...hotPool].sort(() => Math.random() - 0.5).slice(0, hotN);
+    let hotWatchSec = 0;
+
     for (const kw of picked) {
+      // 热点阶段最多看 4 分钟，且不能挤占采集预算
+      if (hotWatchSec > 240) { emit({ type: 'log', message: '热点看得差不多了，进入正事' }); break; }
+      if (budgetMs && Date.now() - started > budgetMs * 0.55) { emit({ type: 'log', message: '时间到，跳过剩余热点' }); break; }
+
       const isInterest = (acc.interests || []).includes(kw);
       emit({ type: 'log', message: `热点搜索：${kw}${isInterest ? '（本号兴趣，多看点）' : ''}` });
       await humanSearch(page, kw);
+      emit({ type: 'log', message: `搜索完成：${kw}` });
+      await ensureVideoCards(page);
       await humanScroll(page, { rounds: randInt(2, 4) });
 
       // 兴趣词追着看 2–4 条，普通热点 0–1 条
       const watchTarget = isInterest ? randInt(2, 4) : (Math.random() < 0.6 ? 1 : 0);
       for (let v = 0; v < watchTarget; v++) {
-        if (!(await clickRandomVideo(page))) break;
-        const sec = isInterest ? randInt(10, 40) : randInt(6, 18);
-        await sleep(sec * 1000);
+        emit({ type: 'log', message: `  尝试点开第 ${v + 1} 条` });
+        if (!(await clickRandomVideo(page))) { emit({ type: 'log', message: '  没找到可点的卡片' }); break; }
+        const w = await watchVideo(page);
+        hotWatchSec += w.watched;
+        emit({ type: 'log', message: `  看了 ${w.watched}s（时长 ${w.duration}s）` });
         if (Math.random() < (isInterest ? 0.6 : 0.4)) {
           await peekComments(page, randInt(3000, 9000));
           result.comments++;
@@ -388,6 +516,7 @@ export async function runSession(acc, opts = {}) {
         await back(page);
         result.videos++;
         await sleep(randInt(800, 2200));
+        if (hotWatchSec > 240) break;
       }
       result.searched.push(kw);
     }
@@ -396,7 +525,11 @@ export async function runSession(acc, opts = {}) {
     emit({ type: 'log', message: `行业搜索：${industry}` });
     const search = await collectIndustry(page, industry, {
       onEvent: emit,
-      target: opts.targetLinks || randInt(15, 25)
+      target: opts.targetLinks || randInt(15, 25),
+      keep: (it) => {
+        const t = (it.desc || '') + (it.author || '');
+        return t.includes(acc.industry) || t.includes(industry);
+      }
     });
     if (search.captcha) {
       emit({ type: 'error', message: '出现验证码，本轮中止' });
@@ -405,10 +538,29 @@ export async function runSession(acc, opts = {}) {
     result.links = search.items;
     emit({ type: 'log', message: `行业搜索拿到 ${search.items.length} 条` });
 
-    // ④ 收尾：回首页刷两下
-    emit({ type: 'log', message: '收尾：回首页' });
-    await goto(page, 'https://www.douyin.com/', randInt(1800, 2800));
+    // ④ 收尾：回推荐页刷两下
+    emit({ type: 'log', message: '收尾：回推荐页' });
+    await goRecommend(page);
     await humanScroll(page, { rounds: randInt(2, 4) });
+
+    // ⑤ 补足时长：真人不会搜完就关，继续待着看
+    const targetMs = (opts.durationMin || 0) * 60_000;
+    const elapsed = Date.now() - started;
+    if (targetMs > elapsed + 30_000) {
+      const remainMin = Math.round((targetMs - elapsed) / 60_000);
+      emit({ type: 'log', message: `继续浏览约 ${remainMin} 分钟补足时长` });
+      const endAt = started + targetMs;
+      while (Date.now() < endAt) {
+        await humanScroll(page, { rounds: randInt(2, 4) });
+        if (Math.random() < 0.5 && await clickRandomVideo(page)) {
+          const w = await watchVideo(page);
+          if (Math.random() < 0.35) { await peekComments(page, randInt(3000, 8000)); result.comments++; }
+          await back(page);
+          result.videos++;
+        }
+        await sleep(randInt(1500, 4000));
+      }
+    }
 
     result.durationSec = Math.round((Date.now() - started) / 1000);
     return result;

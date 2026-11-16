@@ -44,6 +44,15 @@ function sessionCount(acc, dateStr) {
   return Math.max(3, Math.min(5, base + delta));
 }
 
+/** 行业词轮换：大词 + 长尾矩阵，按日期和轮次错开 */
+function pickKeyword(cfg, acc, dateStr, idx) {
+  const list = (cfg.industryKeywords && cfg.industryKeywords.length)
+    ? cfg.industryKeywords
+    : [acc.industry];
+  const h = hash(dateStr + acc.id + '|kw' + idx);
+  return list[h % list.length];
+}
+
 export function planAccount(acc, cfg, dateStr, offsetMin = 0) {
   const rnd = mulberry32(hash(dateStr + acc.id));
   const G = cfg.global;
@@ -78,7 +87,8 @@ export function planAccount(acc, cfg, dateStr, offsetMin = 0) {
       targetLinks: perSession,
       clicks,
       commentChecks: comments,
-      hotTopics: hot
+      hotTopics: hot,
+      keyword: pickKeyword(cfg, acc, dateStr, i)
     });
   }
   return sessions;
