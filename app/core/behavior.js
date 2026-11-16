@@ -370,14 +370,24 @@ export async function runSession(acc, opts = {}) {
     const hotN = randInt(2, 4);
     const picked = [...hotPool].sort(() => Math.random() - 0.5).slice(0, hotN);
     for (const kw of picked) {
-      emit({ type: 'log', message: `热点搜索：${kw}` });
+      const isInterest = (acc.interests || []).includes(kw);
+      emit({ type: 'log', message: `热点搜索：${kw}${isInterest ? '（本号兴趣，多看点）' : ''}` });
       await humanSearch(page, kw);
       await humanScroll(page, { rounds: randInt(2, 4) });
-      if (Math.random() < 0.6 && await clickRandomVideo(page)) {
-        await sleep(randInt(6, 18) * 1000);
-        if (Math.random() < 0.4) { await peekComments(page, randInt(3000, 8000)); result.comments++; }
+
+      // 兴趣词追着看 2–4 条，普通热点 0–1 条
+      const watchTarget = isInterest ? randInt(2, 4) : (Math.random() < 0.6 ? 1 : 0);
+      for (let v = 0; v < watchTarget; v++) {
+        if (!(await clickRandomVideo(page))) break;
+        const sec = isInterest ? randInt(10, 40) : randInt(6, 18);
+        await sleep(sec * 1000);
+        if (Math.random() < (isInterest ? 0.6 : 0.4)) {
+          await peekComments(page, randInt(3000, 9000));
+          result.comments++;
+        }
         await back(page);
         result.videos++;
+        await sleep(randInt(800, 2200));
       }
       result.searched.push(kw);
     }

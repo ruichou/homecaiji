@@ -12,52 +12,87 @@ function mulberry32(a) {
 }
 const hash = (s) => { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
 
-export function planAccount(acc, cfg, dateStr) {
+/** 当天整体时间漂移：-40 ~ +40 分钟，避免每天同一分钟开工 */
+function dayOffset(dateStr) {
+  const rnd = mulberry32(hash(dateStr + '|offset'));
+  return Math.round(rnd() * 80 - 40);
+}
+
+/** 按账号兴趣挑热点词：约 7 成来自本号兴趣，3 成来自全网热点 */
+function pickHotTopics(cfg, acc, n, rnd) {
+  const interest = acc.interests || [];
+  const global = cfg.hotTopics || [];
+  const nInterest = Math.min(interest.length, Math.round(n * 0.7));
+  const out = [];
+
+  const pool = [...interest].sort(() => rnd() - 0.5);
+  for (const w of pool) { if (out.length >= nInterest) break; out.push(w); }
+
+  const rest = [...global, ...interest]
+    .filter((w) => !out.includes(w))
+    .sort(() => rnd() - 0.5);
+  for (const w of rest) { if (out.length >= n) break; out.push(w); }
+
+  return out;
+}
+
+/** 每天会话数在 3–5 之间浮动，避免结构固定 */
+function sessionCount(acc, dateStr) {
+  const rnd = mulberry32(hash(dateStr + acc.id + '|cnt'));
+  const base = acc.sessionsPerDay || 4;
+  const delta = Math.floor(rnd() * 3) - 1; // -1, 0, +1
+  return Math.max(3, Math.min(5, base + delta));
+}
+
+export function planAccount(acc, cfg, dateStr, offsetMin = 0) {
   const rnd = mulberry32(hash(dateStr + acc.id));
   const G = cfg.global;
-  const start = toMin(G.workStart);
-  const end = toMin(G.workEnd);
+  const count = sessionCount(acc, dateStr);
+  const start = toMin(G.workStart) + offsetMin;
+  const end = toMin(G.workEnd) + offsetMin;
   const sessions = [];
-  const perSession = Math.max(10, Math.round(acc.dailyLinks / acc.sessionsPerDay));
+  const perSession = Math.max(10, Math.round(acc.dailyLinks / count));
 
-  const totalSessionMin = acc.sessionsPerDay * 32;
-  const span = Math.max(60, end - start - totalSessionMin - 30);
-  const gapBase = Math.max(G.minSessionGapMin, Math.floor(span / Math.max(1, acc.sessionsPerDay - 1)));
+  const totalSessionMin = count * 32;
+  const span = Math.max(count * 40, end - start);
+  const seg = span / count;
 
-  let cursor = start + Math.round(rnd() * 25);
-  for (let i = 0; i < acc.sessionsPerDay; i++) {
-    const dur = 25 + Math.round(rnd() * 15);
+  for (let i = 0; i < count; i++) {
+    // 每个时段内落一次，前后带抖动，保证不会因为游标累计而少排
+    const segStart = start + i * seg;
+    const dur = Math.round(Math.min(25 + rnd() * 15, seg - 12));
+    const st = Math.round(segStart + Math.min(seg - dur - 4, rnd() * 16));
+
     const clicks = G.clickIntoVideos[0] + Math.floor(rnd() * (G.clickIntoVideos[1] - G.clickIntoVideos[0] + 1));
     const comments = G.commentChecks[0] + Math.floor(rnd() * (G.commentChecks[1] - G.commentChecks[0] + 1));
     const hotN = G.hotSearchesPerSession[0] + Math.floor(rnd() * (G.hotSearchesPerSession[1] - G.hotSearchesPerSession[0] + 1));
-    const hot = [...cfg.hotTopics].sort(() => rnd() - 0.5).slice(0, hotN);
+    const hot = pickHotTopics(cfg, acc, hotN, rnd);
 
     sessions.push({
+      type: 'collect',
       account: acc.id,
       index: i + 1,
-      start: toHHMM(cursor),
-      end: toHHMM(cursor + dur),
+      start: toHHMM(st),
+      end: toHHMM(st + dur),
       durationMin: dur,
       targetLinks: perSession,
       clicks,
       commentChecks: comments,
       hotTopics: hot
     });
-    cursor += dur + Math.round(gapBase * (0.75 + rnd() * 0.5));
-    if (cursor > end - 25) break;
   }
   return sessions;
 }
 
 /** 日常闲逛：每天 2 段，避开采集轮次 */
-function planIdle(acc, cfg, dateStr) {
+function planIdle(acc, cfg, dateStr, offsetMin = 0) {
   const rnd = mulberry32(hash(dateStr + acc.id + 'idle'));
   const G = cfg.global;
   const [lo, hi] = G.idleMinutesRange || [15, 35];
   const slots = ['10:30', '18:40'];
   const out = [];
   for (const slot of slots) {
-    const base = toMin(slot);
+    const base = toMin(slot) + offsetMin;
     const start = base + Math.round(rnd() * 20 - 10);
     const dur = Math.round(lo + rnd() * (hi - lo));
     out.push({
@@ -70,7 +105,7 @@ function planIdle(acc, cfg, dateStr) {
       targetLinks: 0,
       clicks: 0,
       commentChecks: 0,
-      hotTopics: [...cfg.hotTopics].sort(() => rnd() - 0.5).slice(0, 2)
+      hotTopics: pickHotTopics(cfg, acc, 2, rnd)
     });
   }
   return out;
@@ -78,8 +113,9 @@ function planIdle(acc, cfg, dateStr) {
 
 export function buildDayPlan(cfg, dateStr) {
   const accounts = cfg.accounts.filter((a) => a.enabled);
-  const collect = accounts.flatMap((a) => planAccount(a, cfg, dateStr).map((s) => ({ ...s, type: 'collect' })));
-  const idle = accounts.flatMap((a) => planIdle(a, cfg, dateStr));
+  const offset = dayOffset(dateStr);
+  const collect = accounts.flatMap((a) => planAccount(a, cfg, dateStr, offset));
+  const idle = accounts.flatMap((a) => planIdle(a, cfg, dateStr, offset));
   const sessions = [...collect, ...idle].sort((a, b) => a.start.localeCompare(b.start));
 
   const breaks = [];
