@@ -42,7 +42,6 @@ export async function openWindow(acc, opts = {}) {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-features=Translate,MediaRouter',
-    '--disable-blink-features=AutomationControlled',
     `--window-size=${opts.width || 520},${opts.height || 900}`
   ];
   if (opts.x !== undefined) args.push(`--window-position=${opts.x},${opts.y ?? 0}`);

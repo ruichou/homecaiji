@@ -38,7 +38,7 @@ export async function ensureChrome(opts = {}) {
 
 async function pickPage(port = PORT) {
   // 页面刚打开时可能是 about:blank，等一下真正带 URL 的页面
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const r = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000) });
     const t = await r.json();
     const pages = t.filter((x) => x.type === 'page');
@@ -46,7 +46,7 @@ async function pickPage(port = PORT) {
     const dy = http.find((x) => /douyin\.com/.test(x.url));
     if (dy) return dy;
     if (http.length) return http[0];
-    if (attempt === 9) return pages[0];
+    if (attempt === 19) return pages[0];
     await new Promise((res) => setTimeout(res, 500));
   }
 }
