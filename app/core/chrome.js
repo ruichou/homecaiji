@@ -43,6 +43,9 @@ export async function openWindow(acc, opts = {}) {
     '--no-default-browser-check',
     '--mute-audio',
     '--disable-features=Translate,MediaRouter',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
     `--window-size=${opts.width || 520},${opts.height || 900}`
   ];
   if (opts.x !== undefined) args.push(`--window-position=${opts.x},${opts.y ?? 0}`);
@@ -77,6 +80,19 @@ export function closeWindow(acc) {
     return true;
   }
   return false;
+}
+
+/** 关掉再开：清掉累积的调试会话，避免页面越跑越卡 */
+export async function restartWindow(acc, opts = {}) {
+  if (await cdpAlive(acc.port)) {
+    closeWindow(acc);
+    // 等端口释放
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (!(await cdpAlive(acc.port))) break;
+    }
+  }
+  return openWindow(acc, opts);
 }
 
 /** 按账号数把窗口横向铺开 */

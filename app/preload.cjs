@@ -15,5 +15,6 @@ contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
   setAuto: (on) => ipcRenderer.invoke('auto:set', on),
   onLog: (cb) => ipcRenderer.on('log', (_e, msg) => cb(msg)),
+  onAutoState: (cb) => ipcRenderer.on('auto:state', (_e, v) => cb(v)),
   onProgress: (cb) => ipcRenderer.on('progress', (_e, data) => cb(data))
 });

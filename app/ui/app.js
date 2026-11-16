@@ -23,6 +23,9 @@ async function refresh() {
   let got = 0;
   for (const a of cfg.accounts) got += st.state.accounts?.[a.id]?.links || 0;
   $('#todaySummary').textContent = `今日 ${got} / ${total} 条`;
+  if ($('#autoToggle').checked !== !!st.state.autoEnabled) {
+    $('#autoToggle').checked = !!st.state.autoEnabled;
+  }
 
   $('#accList').innerHTML = cfg.accounts.map((a) => {
     const rt = st.state.accounts?.[a.id] || {};
@@ -83,6 +86,7 @@ function appendLog({ t, msg, level }) {
 
 window.api.onLog(appendLog);
 window.api.onProgress(() => refresh());
+window.api.onAutoState((v) => { $('#autoToggle').checked = !!v; });
 
 setInterval(() => { $('#clock').textContent = fmtTime(new Date()); }, 1000);
 setInterval(refresh, 15000);

@@ -73,12 +73,17 @@ export async function connectAt(port = PORT) {
     }
   };
 
+  const stats = { timeouts: 0, calls: 0 };
   const send = (method, params = {}) => new Promise((res, rej) => {
     const i = ++id;
+    stats.calls++;
     pending.set(i, { res, rej });
     ws.send(JSON.stringify({ id: i, method, params }));
-    setTimeout(() => { if (pending.has(i)) { pending.delete(i); rej(new Error('timeout ' + method)); } }, 15000);
-  });
+    setTimeout(() => {
+      if (pending.has(i)) { pending.delete(i); stats.timeouts++; rej(new Error('timeout ' + method)); }
+    }, 15000);
+  }).then((v) => { stats.timeouts = 0; return v; });
+  send.stats = stats;
 
   const on = (method, fn) => {
     if (!listeners.has(method)) listeners.set(method, []);
@@ -90,7 +95,7 @@ export async function connectAt(port = PORT) {
     };
   };
 
-  return { send, on, ws, close: () => ws.close() };
+  return { send, on, ws, stats, close: () => ws.close() };
 }
 
 export async function evaluate(send, expression, awaitPromise = true) {

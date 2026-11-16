@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, todayStr, ensureDir, ROOT } from '../app/core/store.js';
-import { openWindow } from '../app/core/chrome.js';
+import { restartWindow } from '../app/core/chrome.js';
 import { runSession } from '../app/core/behavior.js';
 import { buildDayPlan } from '../app/core/scheduler.js';
 import { filterItems, loadTaxonomy } from '../tools/relevance.mjs';
+import { pickNextKeyword, markKeywordUsed } from '../app/core/keywords.js';
 
 const t0 = Date.now();
 const LOG = path.join(ROOT, 'data', 'run.log');
@@ -21,13 +22,14 @@ const cfg = loadConfig();
 const acc = cfg.accounts[0];
 const plan = buildDayPlan(cfg, todayStr());
 const session = plan.sessions.find((s) => s.type === 'collect') || { hotTopics: cfg.hotTopics.slice(0, 3), targetLinks: 20 };
-const keyword = process.env.KEYWORD || session.keyword || acc.industry;
-
+const keyword = process.env.KEYWORD && process.env.KEYWORD !== 'auto'
+  ? process.env.KEYWORD
+  : pickNextKeyword(cfg);
 say(`账号 ${acc.id} · 关键词 ${keyword} · 目标 ${session.targetLinks} 条`);
 say(`热点词: ${session.hotTopics.join(', ')}`);
 
-await openWindow(acc, { width: 520, height: 900 });
-say('窗口就绪');
+await restartWindow(acc, { width: 520, height: 900 });
+say('窗口就绪（已重启浏览器）');
 
 const res = await runSession(acc, {
   hotTopics: session.hotTopics,
@@ -56,6 +58,7 @@ fs.writeFileSync(file, JSON.stringify({
   account: acc.id, date: todayStr(), savedAt: new Date().toISOString(), items: [...merged.values()]
 }, null, 2), 'utf8');
 say(`已落盘（累计 ${merged.size} 条）`);
+markKeywordUsed(keyword, { produced: kept.length });
 
 if (kept.length) {
   const { pushLinks } = await import('../app/core/push.js');

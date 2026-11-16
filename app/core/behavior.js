@@ -4,6 +4,13 @@ import { connectAt, evaluate, attachSearchCapture, sleep } from '../../tools/lib
 const rand = (a, b) => a + Math.random() * (b - a);
 const randInt = (a, b) => Math.floor(rand(a, b + 1));
 
+/** 看门狗：连续 CDP 超时说明页面已经卡死，立刻中止，别空转 */
+function stallGuard(page) {
+  if (page?.stats && page.stats.timeouts >= 6) {
+    throw new Error('页面连续无响应（CDP 超时 6 次），本轮中止');
+  }
+}
+
 export async function openSession(acc) {
   const page = await connectAt(acc.port);
   await page.send('Page.enable');
@@ -28,6 +35,7 @@ export async function mouseMoveTo(page, x, y) {
     const ease = 1 - Math.pow(1 - t, 3);
     const nx = from.x + (x - from.x) * ease + rand(-4, 4);
     const ny = from.y + (y - from.y) * ease + rand(-4, 4);
+    if (i % 4 === 0) stallGuard(page);
     try {
       await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(nx), y: Math.round(ny) });
     } catch {}
@@ -45,12 +53,25 @@ export async function humanClick(page, x, y) {
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
 }
 
+/** 滚动前暂停页面上的视频，避免解码占满渲染器导致输入事件超时 */
+async function pauseVideos(page) {
+  try {
+    await evaluate(page.send, `(() => {
+      let n = 0;
+      document.querySelectorAll('video').forEach(v => { try { if (!v.paused) { v.pause(); n++; } } catch {} });
+      return n;
+    })()`);
+  } catch {}
+}
+
 /** 滚动手势：一次下滑拆成多段，先快后慢，模拟惯性 */
 export async function humanScroll(page, { rounds = 6, pauseMin = 800, pauseMax = 3200 } = {}) {
   let geo = { w: 900, h: 800 };
   try { geo = await evaluate(page.send, `({w: innerWidth, h: innerHeight})`); } catch {}
+  await pauseVideos(page);
 
   for (let r = 0; r < rounds; r++) {
+    stallGuard(page);
     const x = Math.round(geo.w / 2 + rand(-80, 80));
     const y = Math.round(geo.h * (0.45 + Math.random() * 0.2));
 
@@ -465,22 +486,14 @@ export async function runSession(acc, opts = {}) {
     const st = await loginState(page);
     if (st.needLogin) { emit({ type: 'error', message: '未登录，需要扫码' }); return result; }
 
-    // ① 热身：进推荐流随便看看（根路径会跳到 /jingxuan 精选页，那里没有视频卡片）
-    emit({ type: 'log', message: '热身：刷推荐' });
-    await goRecommend(page);
-    emit({ type: 'log', message: '推荐页就绪，开始滚动' });
-    await humanScroll(page, { rounds: randInt(6, 10) });
-    emit({ type: 'log', message: '热身滚动完成' });
-
-    // 热身时点进 1–2 条看一会儿
-    for (let i = 0; i < randInt(1, 2); i++) {
-      if (await clickRandomVideo(page)) {
-        const w = await watchVideo(page);
-        emit({ type: 'log', message: `点进一条视频，看 ${w.watched}s（时长 ${w.duration}s）` });
-        if (Math.random() < 0.5) { await peekComments(page, randInt(4000, 9000)); result.comments++; }
-        await back(page);
-        result.videos++;
-      }
+    // ① 热身：精选页（网格布局，比推荐流的直播预览轻很多）
+    emit({ type: 'log', message: '热身：刷精选' });
+    try {
+      await goto(page, 'https://www.douyin.com/jingxuan', randInt(2500, 3500));
+      await humanScroll(page, { rounds: randInt(3, 5), pauseMin: 1200, pauseMax: 2800 });
+      emit({ type: 'log', message: '热身完成' });
+    } catch (e) {
+      emit({ type: 'log', message: `热身跳过: ${e.message}` });
     }
 
     // ② 热点搜索（不记录）
@@ -567,7 +580,6 @@ export async function runSession(acc, opts = {}) {
   } catch (e) {
     emit({ type: 'error', message: '会话异常: ' + e.message });
     return { ...result, error: e.message };
-  } finally {
-    try { page.close(); } catch {}
+  } finally {    try { page.close(); } catch {}
   }
 }

@@ -9,6 +9,7 @@ import { buildDayPlan, minutesToNext } from './core/scheduler.js';
 import { runSession, idleSession } from './core/behavior.js';
 import { filterItems, loadTaxonomy } from '../tools/relevance.mjs';
 import { pushLinks } from './core/push.js';
+import { pickNextKeyword, markKeywordUsed } from './core/keywords.js';
 
 const DATA = path.join(ROOT, 'data');
 const COLLECT_DIR = path.join(DATA, 'collected');
@@ -76,10 +77,12 @@ async function runOne(id, opts = {}) {
     await openAndTrack(id);
     log(`—— ${acc.label || acc.id} 开始一轮会话 ——`);
 
+    const keyword = opts.keyword || pickNextKeyword(cfg, cfg.industryKeywords);
+    log(`本轮关键词：${keyword}`);
     const res = await runSession(acc, {
       hotTopics: opts.hotTopics || cfg.hotTopics,
       industry: acc.industry,
-      keyword: opts.keyword || acc.industry,
+      keyword,
       durationMin: opts.durationMin || 20,
       onEvent: (e) => {
         if (e.type === 'log') log(`${acc.label || acc.id}: ${e.message}`);
@@ -113,6 +116,7 @@ async function runOne(id, opts = {}) {
     saveState(state);
 
     log(`${acc.label || acc.id} 本轮完成：原始 ${stats.total} → 保留 ${stats.kept}，累计 ${merged.size} 条`);
+    markKeywordUsed(keyword, { produced: stats.kept });
 
     // 推给引潮
     try {
@@ -217,6 +221,21 @@ app.whenReady().then(() => {
   ensureDir(DATA);
   createWindow();
 
+  // 无人值守：上次开着自动模式，启动就恢复
+  const saved = loadState();
+  if (saved.autoEnabled) {
+    win?.webContents.once('did-finish-load', async () => {
+      setTimeout(async () => {
+        log('开机恢复自动模式：打开所有账号窗口');
+        for (const a of cfg.accounts.filter((x) => x.enabled)) {
+          try { await openAndTrack(a.id); } catch (e) { log(`${a.id} 开窗失败: ${e.message}`, 'error'); }
+        }
+        startAuto();
+        win?.webContents.send('auto:state', true);
+      }, 1500);
+    });
+  }
+
   ipcMain.handle('cfg:load', () => cfg);
   ipcMain.handle('cfg:save', (_e, next) => { cfg = next; saveConfig(cfg); return { ok: true }; });
 
@@ -246,7 +265,12 @@ app.whenReady().then(() => {
   ipcMain.handle('run:once', (_e, id) => runOne(id));
   ipcMain.handle('run:idle', (_e, id) => idleOne(id));
   ipcMain.handle('run:stop', (_e, id) => { running.delete(id); return { ok: true }; });
-  ipcMain.handle('auto:set', (_e, on) => { on ? startAuto() : stopAuto(); return { auto: !!autoTimer }; });
+  ipcMain.handle('auto:set', (_e, on) => {
+    state.autoEnabled = !!on;
+    saveState(state);
+    on ? startAuto() : stopAuto();
+    return { auto: !!autoTimer };
+  });
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
