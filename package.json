@@ -1,0 +1,15 @@
+{
+  "name": "douyin-caiji",
+  "version": "0.1.0",
+  "description": "抖音拟人化采集台 · 多账号窗口 + 分时调度 + 链接产出",
+  "main": "app/main.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/run-electron.js",
+    "dev": "node scripts/run-electron.js"
+  },
+  "devDependencies": {
+    "electron": "43.3.0"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "global": {
+    "workStart": "09:00",
+    "workEnd": "23:00",
+    "nightRestStart": "23:30",
+    "nightRestEnd": "08:30",
+    "minSessionGapMin": 90,
+    "maxSessionGapMin": 180,
+    "hotSearchesPerSession": [2, 4],
+    "industrySearchesPerSession": 1,
+    "clickIntoVideos": [2, 5],
+    "commentChecks": [1, 2],
+    "scrollPauseMs": [800, 3200]
+  },
+  "hotTopics": [
+    "BLG夺冠", "S15全球总决赛", "三角洲行动", "英雄联盟", "AI绘画",
+    "人工智能", "猫咪", "搞笑视频", "新车上市", "电影推荐", "科技数码"
+  ],
+  "accounts": [
+    {
+      "id": "acc1",
+      "label": "号1",
+      "enabled": true,
+      "port": 9222,
+      "profile": "D:\\抖音auto\\chrome-profile",
+      "interests": ["LOL", "英雄联盟", "三角洲", "游戏", "搞笑", "AI"],
+      "dailyLinks": 90,
+      "sessionsPerDay": 4,
+      "industry": "膜结构"
+    }
+  ]
+}

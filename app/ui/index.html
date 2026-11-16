@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>抖音采集台</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">●</span>
+      <span>抖音采集台</span>
+      <span class="ver">v0.1</span>
+    </div>
+    <div class="top-right">
+      <span id="clock" class="muted"></span>
+      <label class="switch">
+        <input type="checkbox" id="autoToggle" />
+        <span>自动模式</span>
+      </label>
+      <button id="btnOpenAll" class="btn ghost">全部开窗</button>
+      <button id="btnCloseAll" class="btn ghost">全部关窗</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel accounts">
+      <div class="panel-head">
+        <h2>账号</h2>
+        <span id="todaySummary" class="muted">—</span>
+      </div>
+      <div id="accList" class="acc-list"></div>
+    </section>
+
+    <section class="panel plan">
+      <div class="panel-head">
+        <h2>今日计划</h2>
+        <span id="planMeta" class="muted">—</span>
+      </div>
+      <div id="planList" class="plan-list"></div>
+    </section>
+
+    <section class="panel logs">
+      <div class="panel-head">
+        <h2>日志</h2>
+        <button id="btnClear" class="btn ghost small">清空</button>
+      </div>
+      <div id="logBox" class="log-box"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
